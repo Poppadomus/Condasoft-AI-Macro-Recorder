@@ -15,3 +15,4 @@ pip install numpy
 
 just copy and paste and run the script in your preffered python enviroment, I prefer to use anaconda and jupyter but each to their own.
 
+Contributions welcome this will remain open source indefinetley released under MIT license.
