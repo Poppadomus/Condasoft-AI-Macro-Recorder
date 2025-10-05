@@ -1,0 +1,1339 @@
+import pyautogui
+import pynput
+from pynput import mouse, keyboard
+import time
+import pandas as pd
+import numpy as np
+import tkinter as tk
+from tkinter import messagebox, filedialog, ttk
+import random
+import threading
+from datetime import datetime
+
+pyautogui.FAILSAFE = True
+pyautogui.PAUSE = 0.01
+
+user_features = {
+    'avg_speed': 50.0,
+    'std_speed': 15.0,
+    'click_frequency': 0.1,
+    'avg_typing_speed': 2.0,
+    'std_key_interval': 0.1,
+    'avg_acceleration': 0.0,
+    'movement_smoothness': 0.5
+}
+
+anti_detection_settings_template = {
+    'enable_anti_detection': {'type': 'BooleanVar', 'value': True},
+    'click_delay_min': {'type': 'DoubleVar', 'value': 0.05},
+    'click_delay_max': {'type': 'DoubleVar', 'value': 0.125},
+    'tremor_amplitude': {'type': 'DoubleVar', 'value': 2.0},
+    'hesitation_pause_prob': {'type': 'DoubleVar', 'value': 0.15},
+    'hesitation_pause_min': {'type': 'DoubleVar', 'value': 0.03},
+    'hesitation_pause_max': {'type': 'DoubleVar', 'value': 0.08},
+    'mid_path_correction_prob': {'type': 'DoubleVar', 'value': 0.1},
+    'mid_path_correction_amplitude': {'type': 'DoubleVar', 'value': 3.0},
+    'fatigue_increment': {'type': 'DoubleVar', 'value': 0.02},
+    'fast_swing_prob': {'type': 'DoubleVar', 'value': 0.33},
+    'fast_swing_duration_min': {'type': 'DoubleVar', 'value': 0.3},
+    'fast_swing_duration_max': {'type': 'DoubleVar', 'value': 0.8},
+    'slow_duration_min': {'type': 'DoubleVar', 'value': 0.5},
+    'slow_duration_max': {'type': 'DoubleVar', 'value': 1.5},
+    'curve_angle_min': {'type': 'DoubleVar', 'value': 10.0},
+    'curve_angle_max': {'type': 'DoubleVar', 'value': 35.0},
+    'steps_multiplier': {'type': 'DoubleVar', 'value': 30.0}
+}
+
+class SettingsWindow:
+    def __init__(self, parent, anti_detection_settings):
+        self.window = tk.Toplevel(parent)
+        self.window.title("Anti-Detection Settings")
+        self.window.geometry("400x600")
+        self.window.configure(bg='#f0f0f0')
+        self.window.resizable(False, False)
+        self.anti_detection_settings = anti_detection_settings
+
+        self.main_frame = ttk.Frame(self.window)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        fields = [
+            ("Click Delay Min (s)", self.anti_detection_settings['click_delay_min'], 0.0, 1.0),
+            ("Click Delay Max (s)", self.anti_detection_settings['click_delay_max'], 0.0, 1.0),
+            ("Tremor Amplitude (pixels)", self.anti_detection_settings['tremor_amplitude'], 0.0, 10.0),
+            ("Hesitation Pause Probability", self.anti_detection_settings['hesitation_pause_prob'], 0.0, 1.0),
+            ("Hesitation Pause Min (s)", self.anti_detection_settings['hesitation_pause_min'], 0.0, 0.5),
+            ("Hesitation Pause Max (s)", self.anti_detection_settings['hesitation_pause_max'], 0.0, 0.5),
+            ("Mid-Path Correction Probability", self.anti_detection_settings['mid_path_correction_prob'], 0.0, 1.0),
+            ("Mid-Path Correction Amplitude (pixels)", self.anti_detection_settings['mid_path_correction_amplitude'], 0.0, 10.0),
+            ("Fatigue Increment", self.anti_detection_settings['fatigue_increment'], 0.0, 0.1),
+            ("Fast Swing Probability", self.anti_detection_settings['fast_swing_prob'], 0.0, 1.0),
+            ("Fast Swing Duration Min (s)", self.anti_detection_settings['fast_swing_duration_min'], 0.0, 2.0),
+            ("Fast Swing Duration Max (s)", self.anti_detection_settings['fast_swing_duration_max'], 0.0, 2.0),
+            ("Slow Duration Min (s)", self.anti_detection_settings['slow_duration_min'], 0.0, 2.0),
+            ("Slow Duration Max (s)", self.anti_detection_settings['slow_duration_max'], 0.0, 2.0),
+            ("Curve Angle Min (degrees)", self.anti_detection_settings['curve_angle_min'], 0.0, 45.0),
+            ("Curve Angle Max (degrees)", self.anti_detection_settings['curve_angle_max'], 0.0, 45.0),
+            ("Steps Multiplier", self.anti_detection_settings['steps_multiplier'], 10.0, 50.0)
+        ]
+
+        for label, var, min_val, max_val in fields:
+            frame = ttk.Frame(self.main_frame)
+            frame.pack(fill=tk.X, pady=2)
+            ttk.Label(frame, text=label).pack(side=tk.LEFT)
+            entry = ttk.Entry(frame, textvariable=var)
+            entry.pack(side=tk.RIGHT)
+            entry.bind("<FocusOut>", lambda e, v=var, min_v=min_val, max_v=max_val: self.validate_entry(v, min_v, max_v))
+            entry.bind("<Return>", lambda e, v=var, min_v=min_val, max_v=max_val: self.validate_entry(v, min_v, max_v))
+
+        button_frame = ttk.Frame(self.main_frame)
+        button_frame.pack(pady=10)
+        ttk.Button(button_frame, text="Save", command=self.save_settings).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=self.window.destroy).pack(side=tk.LEFT, padx=5)
+
+    def validate_entry(self, var, min_val, max_val):
+        try:
+            value = var.get()
+            if value < min_val:
+                var.set(min_val)
+                messagebox.showwarning("Invalid Input", f"Value for {var._name} must be at least {min_val}")
+            elif value > max_val:
+                var.set(max_val)
+                messagebox.showwarning("Invalid Input", f"Value for {var._name} must not exceed {max_val}")
+        except tk.TclError:
+            var.set(min_val)
+            messagebox.showwarning("Invalid Input", f"Invalid input for {var._name}. Using default: {min_val}")
+
+    def save_settings(self):
+        try:
+            if self.anti_detection_settings['click_delay_min'].get() > self.anti_detection_settings['click_delay_max'].get():
+                self.anti_detection_settings['click_delay_min'].set(self.anti_detection_settings['click_delay_max'].get())
+                messagebox.showwarning("Invalid Range", "Click Delay Min set to equal Max")
+            if self.anti_detection_settings['hesitation_pause_min'].get() > self.anti_detection_settings['hesitation_pause_max'].get():
+                self.anti_detection_settings['hesitation_pause_min'].set(self.anti_detection_settings['hesitation_pause_max'].get())
+                messagebox.showwarning("Invalid Range", "Hesitation Pause Min set to equal Max")
+            if self.anti_detection_settings['fast_swing_duration_min'].get() > self.anti_detection_settings['fast_swing_duration_max'].get():
+                self.anti_detection_settings['fast_swing_duration_min'].set(self.anti_detection_settings['fast_swing_duration_max'].get())
+                messagebox.showwarning("Invalid Range", "Fast Swing Duration Min set to equal Max")
+            if self.anti_detection_settings['slow_duration_min'].get() > self.anti_detection_settings['slow_duration_max'].get():
+                self.anti_detection_settings['slow_duration_min'].set(self.anti_detection_settings['slow_duration_max'].get())
+                messagebox.showwarning("Invalid Range", "Slow Duration Min set to equal Max")
+            if self.anti_detection_settings['curve_angle_min'].get() > self.anti_detection_settings['curve_angle_max'].get():
+                self.anti_detection_settings['curve_angle_min'].set(self.anti_detection_settings['curve_angle_max'].get())
+                messagebox.showwarning("Invalid Range", "Curve Angle Min set to equal Max")
+            messagebox.showinfo("Success", "Settings saved!")
+            self.window.destroy()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save settings: {e}")
+
+class MacroEditor:
+    def __init__(self, parent, macro_data, save_callback, load_callback, anti_detection_settings):
+        self.macro_data = macro_data.copy()
+        self.save_callback = save_callback
+        self.load_callback = load_callback
+        self.anti_detection_settings = anti_detection_settings
+        self.window = tk.Toplevel(parent)
+        self.window.title("Macro Editor")
+        self.window.geometry("800x600")
+        self.window.configure(bg='#f0f0f0')
+
+        self.main_frame = ttk.Frame(self.window)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        self.tree = ttk.Treeview(self.main_frame, columns=('Delta Time', 'Event', 'X', 'Y', 'Key', 'Click'), show='headings')
+        self.tree.heading('Delta Time', text='Delta Time (s)')
+        self.tree.heading('Event', text='Event')
+        self.tree.heading('X', text='X')
+        self.tree.heading('Y', text='Y')
+        self.tree.heading('Key', text='Key')
+        self.tree.heading('Click', text='Click')
+        self.tree.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        self.update_table()
+
+        edit_frame = ttk.Frame(self.main_frame)
+        edit_frame.pack(pady=5, fill=tk.X)
+
+        ttk.Label(edit_frame, text="Delta Time (s):").grid(row=0, column=0, padx=5, sticky='e')
+        self.delta_time_entry = ttk.Entry(edit_frame)
+        self.delta_time_entry.grid(row=0, column=1, padx=5, sticky='ew')
+        self.delta_time_entry.bind("<FocusOut>", self.validate_delta_time)
+        self.delta_time_entry.bind("<Return>", self.validate_delta_time)
+
+        ttk.Label(edit_frame, text="Event:").grid(row=0, column=2, padx=5, sticky='e')
+        self.event_entry = ttk.Entry(edit_frame)
+        self.event_entry.grid(row=0, column=3, padx=5, sticky='ew')
+        self.event_entry.bind("<FocusOut>", self.validate_event)
+        self.event_entry.bind("<Return>", self.validate_event)
+
+        ttk.Label(edit_frame, text="X:").grid(row=1, column=0, padx=5, sticky='e')
+        self.x_entry = ttk.Entry(edit_frame)
+        self.x_entry.grid(row=1, column=1, padx=5, sticky='ew')
+        self.x_entry.bind("<FocusOut>", self.validate_coord)
+        self.x_entry.bind("<Return>", self.validate_coord)
+
+        ttk.Label(edit_frame, text="Y:").grid(row=1, column=2, padx=5, sticky='e')
+        self.y_entry = ttk.Entry(edit_frame)
+        self.y_entry.grid(row=1, column=3, padx=5, sticky='ew')
+        self.y_entry.bind("<FocusOut>", self.validate_coord)
+        self.y_entry.bind("<Return>", self.validate_coord)
+
+        ttk.Label(edit_frame, text="Key:").grid(row=2, column=0, padx=5, sticky='e')
+        self.key_entry = ttk.Entry(edit_frame)
+        self.key_entry.grid(row=2, column=1, padx=5, sticky='ew')
+        self.key_entry.bind("<FocusOut>", self.validate_key)
+        self.key_entry.bind("<Return>", self.validate_key)
+
+        ttk.Label(edit_frame, text="Click:").grid(row=2, column=2, padx=5, sticky='e')
+        self.click_entry = ttk.Entry(edit_frame)
+        self.click_entry.grid(row=2, column=3, padx=5, sticky='ew')
+        self.click_entry.bind("<FocusOut>", self.validate_click)
+        self.click_entry.bind("<Return>", self.validate_click)
+
+        ttk.Label(edit_frame, text="Scale Factor:").grid(row=3, column=0, padx=5, sticky='e')
+        self.scale_entry = ttk.Entry(edit_frame)
+        self.scale_entry.grid(row=3, column=1, padx=5, sticky='ew')
+        self.scale_entry.bind("<FocusOut>", self.validate_scale)
+        self.scale_entry.bind("<Return>", self.validate_scale)
+
+        edit_frame.columnconfigure((1, 3), weight=1)
+
+        button_frame = ttk.Frame(self.main_frame)
+        button_frame.pack(pady=5, fill=tk.X)
+        buttons = [
+            ("Update Selected", self.update_action),
+            ("Delete Selected", self.delete_action),
+            ("Move Up", self.move_up),
+            ("Move Down", self.move_down),
+            ("Scale Delta Times", self.scale_times),
+            ("Save Macro", self.save_macro),
+            ("Load Macro", self.load_macro),
+            ("Close", self.window.destroy)
+        ]
+        for text, command in buttons:
+            btn = ttk.Button(button_frame, text=text, command=command)
+            btn.pack(side=tk.LEFT, padx=5)
+
+        self.tree.bind('<<TreeviewSelect>>', self.on_select)
+
+    def validate_delta_time(self, event=None):
+        try:
+            value = self.delta_time_entry.get()
+            if value:
+                value = float(value)
+                if value < 0:
+                    self.delta_time_entry.delete(0, tk.END)
+                    self.delta_time_entry.insert(0, "0.0")
+                    messagebox.showwarning("Invalid Input", "Delta Time must be non-negative")
+                elif value > 10.0:
+                    self.delta_time_entry.delete(0, tk.END)
+                    self.delta_time_entry.insert(0, "10.0")
+                    messagebox.showwarning("Invalid Input", "Delta Time must not exceed 10 seconds")
+        except ValueError:
+            self.delta_time_entry.delete(0, tk.END)
+            self.delta_time_entry.insert(0, "0.0")
+            messagebox.showwarning("Invalid Input", "Delta Time must be a number")
+
+    def validate_event(self, event=None):
+        value = self.event_entry.get().strip()
+        valid_events = ['move', 'click', 'key_press']
+        if value and value not in valid_events:
+            self.event_entry.delete(0, tk.END)
+            self.event_entry.insert(0, "move")
+            messagebox.showwarning("Invalid Input", "Event must be 'move', 'click', or 'key_press'")
+        elif not value:
+            self.event_entry.insert(0, "move")
+
+    def validate_coord(self, event=None):
+        for entry, name in [(self.x_entry, "X"), (self.y_entry, "Y")]:
+            value = entry.get().strip()
+            if value:
+                try:
+                    value = float(value)
+                    screen_width, screen_height = pyautogui.size()
+                    max_val = screen_width if name == "X" else screen_height
+                    if value < 0:
+                        entry.delete(0, tk.END)
+                        entry.insert(0, "0")
+                        messagebox.showwarning("Invalid Input", f"{name} must be non-negative")
+                    elif value > max_val:
+                        entry.delete(0, tk.END)
+                        entry.insert(0, str(max_val))
+                        messagebox.showwarning("Invalid Input", f"{name} must not exceed {max_val}")
+                except ValueError:
+                    entry.delete(0, tk.END)
+                    entry.insert(0, "")
+                    messagebox.showwarning("Invalid Input", f"{name} must be a number or empty")
+
+    def validate_key(self, event=None):
+        value = self.key_entry.get().strip()
+        if value and len(value) > 10:
+            self.key_entry.delete(0, tk.END)
+            self.key_entry.insert(0, value[:10])
+            messagebox.showwarning("Invalid Input", "Key must not exceed 10 characters")
+
+    def validate_click(self, event=None):
+        value = self.click_entry.get().strip()
+        valid_clicks = ['left', 'right', 'middle', '']
+        if value and value not in valid_clicks:
+            self.click_entry.delete(0, tk.END)
+            self.click_entry.insert(0, "")
+            messagebox.showwarning("Invalid Input", "Click must be 'left', 'right', 'middle', or empty")
+
+    def validate_scale(self, event=None):
+        try:
+            value = self.scale_entry.get().strip()
+            if value:
+                value = float(value)
+                if value <= 0:
+                    self.scale_entry.delete(0, tk.END)
+                    self.scale_entry.insert(0, "1.0")
+                    messagebox.showwarning("Invalid Input", "Scale Factor must be positive")
+                elif value > 100:
+                    self.scale_entry.delete(0, tk.END)
+                    self.scale_entry.insert(0, "100.0")
+                    messagebox.showwarning("Invalid Input", "Scale Factor must not exceed 100")
+        except ValueError:
+            self.scale_entry.delete(0, tk.END)
+            self.scale_entry.insert(0, "1.0")
+            messagebox.showwarning("Invalid Input", "Scale Factor must be a number")
+
+    def update_table(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for i, action in enumerate(self.macro_data):
+            self.tree.insert('', tk.END, values=(
+                f"{action['delta_time']:.3f}",
+                action['event'],
+                action.get('x', ''),
+                action.get('y', ''),
+                action.get('key', ''),
+                action.get('click', '')
+            ), tags=(i,))
+
+    def on_select(self, event):
+        selected = self.tree.selection()
+        if selected:
+            item = selected[0]
+            index = int(self.tree.item(item, 'tags')[0])
+            action = self.macro_data[index]
+            self.delta_time_entry.delete(0, tk.END)
+            self.delta_time_entry.insert(0, f"{action['delta_time']:.3f}")
+            self.event_entry.delete(0, tk.END)
+            self.event_entry.insert(0, action['event'])
+            self.x_entry.delete(0, tk.END)
+            self.x_entry.insert(0, str(action.get('x', '')))
+            self.y_entry.delete(0, tk.END)
+            self.y_entry.insert(0, str(action.get('y', '')))
+            self.key_entry.delete(0, tk.END)
+            self.key_entry.insert(0, str(action.get('key', '')))
+            self.click_entry.delete(0, tk.END)
+            self.click_entry.insert(0, str(action.get('click', '')))
+
+    def update_action(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "No action selected!")
+            return
+        index = int(self.tree.item(selected[0], 'tags')[0])
+        try:
+            self.validate_delta_time()
+            self.validate_event()
+            self.validate_coord()
+            self.validate_key()
+            self.validate_click()
+            delta_time = float(self.delta_time_entry.get())
+            event = self.event_entry.get()
+            x = float(self.x_entry.get()) if self.x_entry.get() else None
+            y = float(self.y_entry.get()) if self.y_entry.get() else None
+            key = self.key_entry.get() if self.key_entry.get() else None
+            click = self.click_entry.get() if self.click_entry.get() else None
+            if event == 'move' and (x is None or y is None):
+                raise ValueError("Move event requires X and Y coordinates")
+            if event == 'click' and (x is None or y is None or click is None):
+                raise ValueError("Click event requires X, Y, and Click type")
+            if event == 'key_press' and key is None:
+                raise ValueError("Key press event requires a key")
+            action = {
+                'delta_time': delta_time,
+                'event': event,
+                'x': x,
+                'y': y,
+                'key': key,
+                'click': click
+            }
+            self.macro_data[index] = action
+            self.update_table()
+            messagebox.showinfo("Success", "Action updated!")
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid input: {e}")
+
+    def delete_action(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "No action selected!")
+            return
+        if messagebox.askyesno("Confirm", "Delete selected action?"):
+            index = int(self.tree.item(selected[0], 'tags')[0])
+            self.macro_data.pop(index)
+            self.update_table()
+            messagebox.showinfo("Success", "Action deleted!")
+
+    def move_up(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "No action selected!")
+            return
+        index = int(self.tree.item(selected[0], 'tags')[0])
+        if index > 0:
+            self.macro_data[index], self.macro_data[index - 1] = self.macro_data[index - 1], self.macro_data[index]
+            self.update_table()
+            self.tree.selection_set(self.tree.get_children()[index - 1])
+
+    def move_down(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Warning", "No action selected!")
+            return
+        index = int(self.tree.item(selected[0], 'tags')[0])
+        if index < len(self.macro_data) - 1:
+            self.macro_data[index], self.macro_data[index + 1] = self.macro_data[index + 1], self.macro_data[index]
+            self.update_table()
+            self.tree.selection_set(self.tree.get_children()[index + 1])
+
+    def scale_times(self):
+        try:
+            self.validate_scale()
+            factor = float(self.scale_entry.get())
+            for action in self.macro_data:
+                action['delta_time'] *= factor
+            self.update_table()
+            messagebox.showinfo("Success", "Delta times scaled!")
+        except ValueError as e:
+            messagebox.showerror("Error", f"Invalid scale factor: {e}")
+
+    def save_macro(self):
+        if not self.macro_data:
+            messagebox.showwarning("Warning", "No macro data to save!")
+            return
+        self.save_callback(self.macro_data)
+
+    def load_macro(self):
+        new_data = self.load_callback()
+        if new_data:
+            self.macro_data = new_data
+            self.update_table()
+            messagebox.showinfo("Success", "Macro loaded!")
+
+class AutomationGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("AI Macro Recorder")
+        self.root.geometry("600x500")
+        self.root.configure(bg='#f0f0f0')
+
+        self.anti_detection_settings = {}
+        for key, config in anti_detection_settings_template.items():
+            var_type = getattr(tk, config['type'])
+            self.anti_detection_settings[key] = var_type(master=self.root, value=config['value'])
+
+        self.message_count = 0
+        self.main_frame = ttk.Frame(self.root)
+        self.main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        console_frame = ttk.Frame(self.main_frame)
+        console_frame.pack(fill=tk.X, padx=5, pady=5)
+        try:
+            self.console = tk.Text(console_frame, height=5, bg='#e0e0e0', relief='sunken', wrap='word')
+            scrollbar = ttk.Scrollbar(console_frame, orient='vertical', command=self.console.yview)
+            self.console.configure(yscrollcommand=scrollbar.set)
+            self.console.pack(side=tk.LEFT, fill=tk.X, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+            self.console.config(state='disabled')
+            self.log_message("Console initialized")
+        except Exception as e:
+            print(f"Failed to initialize console: {e}")
+            self.console = None
+
+        try:
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.after_idle(self.root.attributes, '-topmost', False)
+            self.root.state('normal')
+            self.log_message("Window visibility set")
+        except Exception as e:
+            self.log_message(f"Failed to set window visibility: {e}")
+
+        try:
+            small_icon = tk.PhotoImage(file='app_icon.png')
+            large_icon = tk.PhotoImage(file='app_icon.png')
+            self.root.iconphoto(False, small_icon, large_icon)
+            self.log_message("Custom taskbar icon set")
+        except Exception as e:
+            self.log_message(f"Failed to set icon: {e} (using default)")
+
+        self.recording_data = []
+        self.macro_data = []
+        self.calibration_data = []
+        self.is_recording = False
+        self.is_replaying = False
+        self.is_simulating = False
+        self.last_event_time = None
+        self.last_move_pos = None
+        self.last_move_time = None
+        self.calibration_window = None
+        self.canvas = None
+        self.dots = []
+        self.current_dot_index = 0
+        self.total_dots = 25
+        self.calibration_start_time = None
+        self.last_macro_path = None
+        self.loop_replay = tk.BooleanVar(master=self.root, value=False)
+        self.input_prevention = tk.BooleanVar(master=self.root, value=False)
+        self.replay_after_id = None
+        self.simulation_after_id = None
+        self.fatigue_factor = 1.0
+        self.input_block_mouse_listener = None
+        self.input_block_keyboard_listener = None
+
+        buttons = [
+            ("Start Recording (Ctrl+R)", self.start_recording),
+            ("Stop Recording (Ctrl+S)", self.stop_recording),
+            ("Save Macro", self.save_current_macro),
+            ("Replay Macro (Ctrl+E)", self.replay_macro),
+            ("Edit Macro", self.open_macro_editor),
+            ("Start Calibration", self.start_calibration),
+            ("Simulate User Behavior", self.simulate_behavior),
+            ("Load Features", self.load_features),
+            ("Settings", self.open_settings)
+        ]
+        for text, command in buttons:
+            btn = ttk.Button(self.main_frame, text=text, command=command)
+            btn.pack(fill=tk.X, pady=5, padx=5)
+
+        checkbox_frame = ttk.Frame(self.main_frame)
+        checkbox_frame.pack(fill=tk.X, pady=5, padx=5)
+        ttk.Checkbutton(checkbox_frame, text="Loop Replay", variable=self.loop_replay).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(checkbox_frame, text="Input Prevention", variable=self.input_prevention).pack(side=tk.LEFT, padx=5)
+        ttk.Checkbutton(self.main_frame, text="Enable Anti-Detection", variable=self.anti_detection_settings['enable_anti_detection']).pack(fill=tk.X, pady=5, padx=5)
+
+        self.status_label = ttk.Label(self.main_frame, text="Status: Idle", background='#e0e0e0', relief='sunken', padding=5)
+        self.status_label.pack(pady=10, fill=tk.X, padx=5)
+
+        self.mouse_listener = None
+        self.keyboard_listener = None
+        self.hotkey_listener = None
+
+        self.start_hotkey_listener()
+
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+
+        self.load_last_macro_path()
+        if self.last_macro_path:
+            self.load_macro_from_path(self.last_macro_path)
+        try:
+            global user_features
+            df = pd.read_csv('user_behavior_features.csv')
+            user_features = df.iloc[0].to_dict()
+            self.log_message("User behavior features loaded automatically")
+        except FileNotFoundError:
+            self.log_message("No user behavior features file found, using default features")
+        except Exception as e:
+            self.log_message(f"Failed to load features automatically: {e}")
+
+    def log_message(self, message):
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        message = f"[{timestamp}] {message}"
+        if hasattr(self, 'console') and self.console is not None:
+            try:
+                self.console.config(state='normal')
+                if self.message_count >= 10:
+                    self.console.delete('1.0', '2.0')
+                    self.message_count -= 1
+                self.console.insert(tk.END, f"{message}\n")
+                self.console.see(tk.END)
+                self.message_count += 1
+                self.console.config(state='disabled')
+            except Exception as e:
+                print(f"Console logging error: {e}\n{message}")
+        else:
+            print(message)
+
+    def start_hotkey_listener(self):
+        try:
+            hotkeys = {
+                '<ctrl>+r': self.start_recording,
+                '<ctrl>+s': self.stop_recording,
+                '<ctrl>+e': self.toggle_replay
+            }
+            self.hotkey_listener = keyboard.GlobalHotKeys(hotkeys)
+            self.hotkey_listener.start()
+            self.log_message("Hotkey listener started (Ctrl+R, Ctrl+S, Ctrl+E)")
+        except Exception as e:
+            self.log_message(f"Hotkey listener error: {e}")
+            messagebox.showerror("Error", f"Failed to start hotkey listener: {e}")
+
+    def on_closing(self):
+        try:
+            if self.is_recording:
+                self.stop_recording()
+            if self.is_replaying:
+                self.stop_replay()
+            if self.is_simulating:
+                self.stop_simulation()
+            if self.input_block_mouse_listener:
+                self.input_block_mouse_listener.stop()
+                self.input_block_mouse_listener = None
+            if self.input_block_keyboard_listener:
+                self.input_block_keyboard_listener.stop()
+                self.input_block_keyboard_listener = None
+            if self.hotkey_listener:
+                self.hotkey_listener.stop()
+            if self.calibration_window:
+                self.calibration_window.destroy()
+        except Exception as e:
+            self.log_message(f"Error during cleanup: {e}")
+        self.root.destroy()
+
+    def start_input_blocking(self):
+        if not self.input_prevention.get():
+            return
+        try:
+            def on_move(x, y):
+                return False
+            def on_click(x, y, button, pressed):
+                return False
+            def on_scroll(x, y, dx, dy):
+                return False
+            def on_press(key):
+                return False
+            def on_release(key):
+                return False
+            self.input_block_mouse_listener = mouse.Listener(
+                on_move=on_move,
+                on_click=on_click,
+                on_scroll=on_scroll,
+                suppress=True
+            )
+            self.input_block_keyboard_listener = keyboard.Listener(
+                on_press=on_press,
+                on_release=on_release,
+                suppress=True
+            )
+            self.input_block_mouse_listener.start()
+            self.input_block_keyboard_listener.start()
+            self.log_message("Input prevention enabled: blocking keyboard and mouse input")
+        except Exception as e:
+            self.log_message(f"Failed to start input blocking: {e}")
+            messagebox.showerror("Error", f"Failed to start input blocking: {e}")
+
+    def stop_input_blocking(self):
+        try:
+            if self.input_block_mouse_listener:
+                self.input_block_mouse_listener.stop()
+                self.input_block_mouse_listener = None
+            if self.input_block_keyboard_listener:
+                self.input_block_keyboard_listener.stop()
+                self.input_block_keyboard_listener = None
+            if self.input_prevention.get():
+                self.log_message("Input prevention disabled: keyboard and mouse input restored")
+        except Exception as e:
+            self.log_message(f"Error stopping input blocking: {e}")
+
+    def load_last_macro_path(self):
+        try:
+            with open('last_macro.txt', 'r') as f:
+                self.last_macro_path = f.read().strip()
+            self.log_message(f"Last macro path loaded: {self.last_macro_path}")
+        except FileNotFoundError:
+            self.log_message("No last macro path found")
+        except Exception as e:
+            self.log_message(f"Error loading last macro path: {e}")
+
+    def save_last_macro_path(self, file_path):
+        try:
+            with open('last_macro.txt', 'w') as f:
+                f.write(file_path)
+            self.last_macro_path = file_path
+            self.log_message(f"Last macro path saved: {file_path}")
+        except Exception as e:
+            self.log_message(f"Error saving last macro path: {e}")
+
+    def load_macro_from_path(self, file_path):
+        try:
+            df = pd.read_csv(file_path)
+            self.macro_data = df.to_dict('records')
+            self.log_message(f"Macro loaded automatically from {file_path}")
+            messagebox.showinfo("Success", f"Macro loaded from {file_path}")
+        except Exception as e:
+            self.log_message(f"Failed to load macro from {file_path}: {e}")
+            messagebox.showerror("Error", f"Failed to load macro from {file_path}: {e}")
+
+    def start_recording(self):
+        if not self.is_recording:
+            if self.is_replaying or self.is_simulating:
+                messagebox.showwarning("Warning", "Cannot record while replaying or simulating!")
+                return
+            self.is_recording = True
+            self.recording_data = []
+            self.macro_data = []
+            self.last_event_time = time.time()
+            self.last_move_pos = None
+            self.last_move_time = None
+            self.status_label.config(text="Status: Recording...")
+            try:
+                self.mouse_listener = mouse.Listener(on_move=self.on_move, on_click=self.on_click)
+                self.keyboard_listener = keyboard.Listener(on_press=self.on_press)
+                self.mouse_listener.start()
+                self.keyboard_listener.start()
+                self.log_message("Recording started")
+            except Exception as e:
+                self.is_recording = False
+                self.log_message(f"Failed to start listeners: {e}")
+                messagebox.showerror("Error", f"Failed to start listeners: {e}")
+                self.status_label.config(text="Status: Idle")
+        else:
+            messagebox.showwarning("Warning", "Recording already in progress!")
+
+    def stop_recording(self):
+        if self.is_recording:
+            self.is_recording = False
+            try:
+                if self.mouse_listener:
+                    self.mouse_listener.stop()
+                if self.keyboard_listener:
+                    self.keyboard_listener.stop()
+                self.log_message("Recording stopped")
+            except Exception as e:
+                self.log_message(f"Error stopping listeners: {e}")
+            self.mouse_listener = None
+            self.keyboard_listener = None
+            self.status_label.config(text="Status: Idle")
+            self.last_event_time = None
+            self.last_move_pos = None
+            self.last_move_time = None
+            self.update_features()
+        else:
+            messagebox.showwarning("Warning", "No recording in progress!")
+
+    def on_move(self, x, y):
+        if self.is_recording:
+            try:
+                current_time = time.time()
+                delta_time = current_time - self.last_event_time
+                skip = False
+                if self.last_move_pos and self.last_move_time:
+                    dx = x - self.last_move_pos[0]
+                    dy = y - self.last_move_pos[1]
+                    dist = np.sqrt(dx**2 + dy**2)
+                    time_since_last_move = current_time - self.last_move_time
+                    if dist < 10 and time_since_last_move < 0.1:
+                        skip = True
+                if not skip:
+                    self.recording_data.append({
+                        'delta_time': delta_time,
+                        'event': 'move',
+                        'x': x,
+                        'y': y,
+                        'key': None,
+                        'click': None
+                    })
+                    self.macro_data.append({
+                        'delta_time': delta_time,
+                        'event': 'move',
+                        'x': x,
+                        'y': y
+                    })
+                    self.last_event_time = current_time
+                    self.last_move_pos = (x, y)
+                    self.last_move_time = current_time
+            except Exception as e:
+                self.log_message(f"Move error: {e}")
+
+    def on_click(self, x, y, button, pressed):
+        if self.is_recording and pressed:
+            try:
+                current_time = time.time()
+                delta_time = current_time - self.last_event_time
+                self.recording_data.append({
+                    'delta_time': delta_time,
+                    'event': 'click',
+                    'x': x,
+                    'y': y,
+                    'key': None,
+                    'click': str(button)
+                })
+                self.macro_data.append({
+                    'delta_time': delta_time,
+                    'event': 'click',
+                    'x': x,
+                    'y': y,
+                    'click': str(button)
+                })
+                self.last_event_time = current_time
+                self.last_move_pos = (x, y)
+                self.last_move_time = current_time
+            except Exception as e:
+                self.log_message(f"Click error: {e}")
+
+    def on_press(self, key):
+        if self.is_recording:
+            try:
+                current_time = time.time()
+                delta_time = current_time - self.last_event_time
+                key_str = str(key).replace("Key.", "")
+                self.recording_data.append({
+                    'delta_time': delta_time,
+                    'event': 'key_press',
+                    'x': None,
+                    'y': None,
+                    'key': key_str,
+                    'click': None
+                })
+                self.macro_data.append({
+                    'delta_time': delta_time,
+                    'event': 'key_press',
+                    'key': key_str
+                })
+                self.last_event_time = current_time
+            except Exception as e:
+                self.log_message(f"Key press error: {e}")
+
+    def save_macro(self, macro_data):
+        if not macro_data:
+            messagebox.showwarning("Warning", "No macro data to save!")
+            return
+        file_path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+        if file_path:
+            try:
+                df = pd.DataFrame(macro_data)
+                df.to_csv(file_path, index=False)
+                self.save_last_macro_path(file_path)
+                messagebox.showinfo("Success", f"Macro saved to {file_path}")
+            except Exception as e:
+                self.log_message(f"Failed to save macro: {e}")
+                messagebox.showerror("Error", f"Failed to save macro: {e}")
+
+    def save_current_macro(self):
+        if not self.macro_data:
+            messagebox.showwarning("Warning", "No macro data to save! Record first.")
+            return
+        self.save_macro(self.macro_data)
+
+    def load_macro(self):
+        file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+        if file_path:
+            try:
+                df = pd.read_csv(file_path)
+                macro_data = df.to_dict('records')
+                self.macro_data = macro_data
+                self.save_last_macro_path(file_path)
+                messagebox.showinfo("Success", f"Macro loaded from {file_path}")
+                self.log_message(f"Macro loaded from {file_path}")
+                return macro_data
+            except Exception as e:
+                self.log_message(f"Failed to load macro: {e}")
+                messagebox.showerror("Error", f"Failed to load macro: {e}")
+        return None
+
+    def open_macro_editor(self):
+        if not self.macro_data:
+            messagebox.showwarning("Warning", "No macro data to edit! Record or load a macro first.")
+            return
+        MacroEditor(self.root, self.macro_data, self.save_macro, self.load_macro, self.anti_detection_settings)
+
+    def open_settings(self):
+        SettingsWindow(self.root, self.anti_detection_settings)
+
+    def toggle_replay(self):
+        if self.is_replaying:
+            self.stop_replay()
+        else:
+            if not self.last_macro_path:
+                messagebox.showwarning("Warning", "No macro loaded! Please load or record a macro first.")
+                return
+            self.replay_macro(self.last_macro_path)
+
+    def stop_replay(self):
+        if self.is_replaying:
+            self.is_replaying = False
+            if self.replay_after_id:
+                self.root.after_cancel(self.replay_after_id)
+                self.replay_after_id = None
+            self.stop_input_blocking()
+            self.status_label.config(text="Status: Idle")
+            self.log_message("Macro replay stopped")
+            messagebox.showinfo("Success", "Macro replay stopped")
+            self.fatigue_factor = 1.0
+
+    def interpolate_bezier_path(self, start_x, start_y, end_x, end_y, steps=10, duration=1.0):
+        if not self.anti_detection_settings['enable_anti_detection'].get():
+            points = []
+            for t in np.linspace(0, 1, steps):
+                x = start_x + t * (end_x - start_x)
+                y = start_y + t * (end_y - start_y)
+                points.append((x, y))
+            return points
+
+        points = []
+        mid_x = (start_x + end_x) / 2
+        mid_y = (start_y + end_y) / 2
+        distance = np.sqrt((end_x - start_x)**2 + (end_y - start_y)**2)
+        max_angle = np.radians(random.uniform(self.anti_detection_settings['curve_angle_min'].get(), self.anti_detection_settings['curve_angle_max'].get()) * self.fatigue_factor)
+        curve_factor = distance * max(user_features['movement_smoothness'], 0.1) * random.uniform(0.3, 0.5)
+        angle1 = np.arctan2(end_y - start_y, end_x - start_x) + random.choice([-1, 1]) * max_angle
+        angle2 = np.arctan2(end_y - start_y, end_x - start_x) + random.choice([-1, 1]) * max_angle * 0.8
+        control1_x = start_x + (distance / 3) * np.cos(angle1)
+        control1_y = start_y + (distance / 3) * np.sin(angle1)
+        control2_x = end_x - (distance / 3) * np.cos(angle2)
+        control2_y = end_y - (distance / 3) * np.sin(angle2)
+        
+        for t in np.linspace(0, 1, steps):
+            t2 = t * t
+            t3 = t2 * t
+            mt = 1 - t
+            mt2 = mt * mt
+            mt3 = mt2 * mt
+            x = mt3 * start_x + 3 * mt2 * t * control1_x + 3 * mt * t2 * control2_x + t3 * end_x
+            y = mt3 * start_y + 3 * mt2 * t * control1_y + 3 * mt * t2 * control2_y + t3 * end_y
+            if self.anti_detection_settings['enable_anti_detection'].get():
+                tremor = random.uniform(-1, 1) * self.anti_detection_settings['tremor_amplitude'].get() * self.fatigue_factor
+                x += tremor
+                y += tremor
+            points.append((x, y))
+        return points
+
+    def replay_macro(self, file_path=None):
+        if self.is_replaying:
+            messagebox.showwarning("Warning", "Replay already in progress!")
+            return
+        if self.is_recording or self.is_simulating:
+            messagebox.showwarning("Warning", "Cannot replay while recording or simulating!")
+            return
+        if not file_path:
+            file_path = filedialog.askopenfilename(filetypes=[("CSV files", "*.csv")])
+            if not file_path:
+                return
+        try:
+            df = pd.read_csv(file_path)
+            required_columns = ['delta_time', 'event']
+            if not all(col in df.columns for col in required_columns):
+                raise ValueError("Invalid CSV format: missing required columns")
+            self.is_replaying = True
+            self.fatigue_factor = 1.0
+            self.start_input_blocking()
+            self.status_label.config(text="Status: Replaying Macro...")
+            self.save_last_macro_path(file_path)
+
+            def replay_step(index=0):
+                if not self.is_replaying:
+                    self.stop_input_blocking()
+                    return
+                if index >= len(df):
+                    self.stop_input_blocking()
+                    if self.loop_replay.get() and self.is_replaying:
+                        self.fatigue_factor = 1.0
+                        self.log_message("Looping macro replay")
+                        self.start_input_blocking()
+                        replay_step(0)
+                    else:
+                        self.is_replaying = False
+                        self.status_label.config(text="Status: Idle")
+                        messagebox.showinfo("Success", "Macro replay completed!")
+                        self.log_message("Macro replay completed")
+                        self.fatigue_factor = 1.0
+                    return
+                row = df.iloc[index]
+                try:
+                    if row['event'] == 'move' and pd.notna(row.get('x')) and pd.notna(row.get('y')):
+                        current_x, current_y = pyautogui.position()
+                        target_x, target_y = row['x'], row['y']
+                        if self.anti_detection_settings['enable_anti_detection'].get():
+                            distance = np.sqrt((target_x - current_x)**2 + (target_y - current_y)**2)
+                            is_fast_swing = random.random() < self.anti_detection_settings['fast_swing_prob'].get()
+                            steps = max(20, int(user_features['movement_smoothness'] * self.anti_detection_settings['steps_multiplier'].get()))
+                            if is_fast_swing:
+                                speed_multiplier = 1.5
+                                base_duration = distance / (max(user_features['avg_speed'], 1e-6) * speed_multiplier) * (1 + 0.2 * self.fatigue_factor)
+                                duration = max(self.anti_detection_settings['fast_swing_duration_min'].get(), min(base_duration + np.random.lognormal(mean=0, sigma=0.2), self.anti_detection_settings['fast_swing_duration_max'].get()))
+                                self.log_message(f"Fast swing movement to ({target_x}, {target_y}), duration: {duration:.2f}s, steps: {steps}")
+                            else:
+                                base_duration = distance / max(user_features['avg_speed'], 1e-6) * (1 + 0.3 * self.fatigue_factor)
+                                duration = max(self.anti_detection_settings['slow_duration_min'].get(), min(base_duration + np.random.lognormal(mean=0, sigma=0.2), self.anti_detection_settings['slow_duration_max'].get()))
+                                self.log_message(f"Slow movement to ({target_x}, {target_y}), duration: {duration:.2f}s, steps: {steps}")
+                            path = self.interpolate_bezier_path(current_x, current_y, target_x, target_y, steps=steps, duration=duration)
+                            t_values = np.linspace(0, 1, steps)
+                            if is_fast_swing:
+                                velocity_profile = 10 * t_values * (1 - t_values)**3
+                                velocity_profile /= velocity_profile.sum()
+                            else:
+                                velocity_profile = 30 * t_values**2 * (1 - t_values)**2 * (1 + 0.1 * np.sin(np.pi * t_values))
+                                velocity_profile /= velocity_profile.sum()
+                            for i, (x, y) in enumerate(path[:-2]):
+                                step_duration = duration * velocity_profile[i]
+                                step_duration = max(0.02, min(step_duration, 0.06))
+                                if random.random() < self.anti_detection_settings['hesitation_pause_prob'].get() and 0.4 < t_values[i] < 0.6:
+                                    pause = random.uniform(self.anti_detection_settings['hesitation_pause_min'].get(), self.anti_detection_settings['hesitation_pause_max'].get())
+                                    time.sleep(pause)
+                                    self.log_message(f"Hesitation pause of {pause:.3f}s at step {i+1}")
+                                if random.random() < self.anti_detection_settings['mid_path_correction_prob'].get() and t_values[i] > 0.5:
+                                    correction = random.uniform(-1, 1) * self.anti_detection_settings['mid_path_correction_amplitude'].get() * self.fatigue_factor
+                                    x += correction
+                                    y += correction
+                                    self.log_message(f"Mid-path correction at step {i+1}: ({x:.2f}, {y:.2f})")
+                                pyautogui.moveTo(x, y, duration=step_duration, tween=pyautogui.easeInOutQuad)
+                            overshoot_x = path[-1][0] + random.uniform(-1, 1) * self.anti_detection_settings['mid_path_correction_amplitude'].get() * self.fatigue_factor
+                            overshoot_y = path[-1][1] + random.uniform(-1, 1) * self.anti_detection_settings['mid_path_correction_amplitude'].get() * self.fatigue_factor
+                            pyautogui.moveTo(overshoot_x, overshoot_y, duration=0.1, tween=pyautogui.easeInOutQuad)
+                            pyautogui.moveTo(target_x, target_y, duration=0.1, tween=pyautogui.easeInOutQuad)
+                            self.log_message(f"Micro-correction: overshoot to ({overshoot_x:.2f}, {overshoot_y:.2f}), corrected to ({target_x:.2f}, {target_y:.2f})")
+                        else:
+                            pyautogui.moveTo(target_x, target_y, duration=row['delta_time'], tween=pyautogui.easeOutQuad)
+                    elif row['event'] == 'click' and pd.notna(row.get('x')) and pd.notna(row.get('y')) and pd.notna(row.get('click')):
+                        button = row['click'].split('.')[-1]
+                        if self.anti_detection_settings['enable_anti_detection'].get():
+                            click_deviation = np.random.lognormal(mean=0, sigma=0.3) * user_features['std_speed'] * self.fatigue_factor / max(user_features['movement_smoothness'], 1e-6)
+                            click_x = row['x'] + click_deviation * random.choice([-1, 1])
+                            click_y = row['y'] + click_deviation * random.choice([-1, 1])
+                            pyautogui.moveTo(click_x, click_y, duration=0.1, tween=pyautogui.easeInOutQuad)
+                            click_delay = random.uniform(self.anti_detection_settings['click_delay_min'].get(), self.anti_detection_settings['click_delay_max'].get())
+                            time.sleep(click_delay)
+                            self.log_message(f"Click delay: {click_delay:.3f}s")
+                            pyautogui.click(button=button)
+                            self.fatigue_factor += self.anti_detection_settings['fatigue_increment'].get()
+                        else:
+                            pyautogui.moveTo(row['x'], row['y'], duration=0.1, tween=pyautogui.easeOutQuad)
+                            pyautogui.click(button=button)
+                    elif row['event'] == 'key_press' and pd.notna(row.get('key')):
+                        pyautogui.press(row['key'].strip("'"))
+                        if self.anti_detection_settings['enable_anti_detection'].get():
+                            self.fatigue_factor += self.anti_detection_settings['fatigue_increment'].get()
+                    self.replay_after_id = self.root.after(int(max(0, row['delta_time']) * 1000), replay_step, index + 1)
+                except Exception as e:
+                    self.is_replaying = False
+                    self.stop_input_blocking()
+                    self.log_message(f"Replay step error at index {index}: {e}")
+                    messagebox.showerror("Error", f"Replay error at step {index}: {e}")
+                    self.status_label.config(text="Status: Idle")
+                    self.fatigue_factor = 1.0
+
+            replay_step()
+        except Exception as e:
+            self.is_replaying = False
+            self.stop_input_blocking()
+            self.log_message(f"Replay error: {e}")
+            messagebox.showerror("Error", f"Failed to replay macro: {e}")
+            self.status_label.config(text="Status: Idle")
+            self.fatigue_factor = 1.0
+
+    def start_calibration(self):
+        if self.calibration_window:
+            self.calibration_window.destroy()
+        self.calibration_window = tk.Toplevel(self.root)
+        self.calibration_window.title("Calibration")
+        self.calibration_window.geometry("800x600")
+        self.calibration_window.configure(bg='#f0f0f0')
+        self.calibration_window.resizable(False, False)
+
+        self.canvas = tk.Canvas(self.calibration_window, width=750, height=500, bg='#e0e0e0', highlightbackground='#b0b0b0')
+        self.canvas.pack(pady=10)
+
+        ttk.Button(self.calibration_window, text="Cancel", command=self.cancel_calibration).pack(pady=5)
+
+        self.dots = []
+        self.calibration_data.clear()
+        self.current_dot_index = 0
+        self.calibration_start_time = time.time()
+        self.create_next_dot()
+        self.canvas.bind("<Button-1>", self.on_canvas_click)
+        self.status_label.config(text="Status: Click the dot for calibration")
+        self.log_message("Calibration started")
+
+    def create_next_dot(self):
+        if self.current_dot_index < self.total_dots:
+            x = random.randint(50, 700)
+            y = random.randint(50, 450)
+            color = random.choice(['black', 'gray', 'darkgray'])
+            dot = self.canvas.create_oval(x-5, y-5, x+5, y+5, fill=color, outline='#ff0000', width=2)
+            self.dots.append((dot, x, y, color))
+            self.log_message(f"Created dot {self.current_dot_index + 1} at ({x}, {y})")
+        else:
+            self.canvas.unbind("<Button-1>")
+            self.update_features_from_calibration()
+            self.calibration_window.destroy()
+            self.calibration_window = None
+            self.canvas = None
+            self.dots = []
+            self.current_dot_index = 0
+            self.status_label.config(text="Status: Calibration Complete")
+            self.log_message("Calibration completed")
+            messagebox.showinfo("Success", "Calibration completed!")
+
+    def cancel_calibration(self):
+        if self.calibration_window:
+            self.canvas.unbind("<Button-1>")
+            self.calibration_window.destroy()
+            self.calibration_window = None
+            self.canvas = None
+            self.dots = []
+            self.current_dot_index = 0
+            self.calibration_start_time = None
+            self.status_label.config(text="Status: Idle")
+            self.log_message("Calibration canceled")
+            messagebox.showinfo("Info", "Calibration canceled")
+
+    def on_canvas_click(self, event):
+        if not self.dots:
+            return
+        click_x, click_y = event.x, event.y
+        dot, target_x, target_y, _ = self.dots[-1]
+        distance = ((click_x - target_x) ** 2 + (click_y - target_y) ** 2) ** 0.5
+        self.log_message(f"Dot {self.current_dot_index + 1}: ({target_x}, {target_y}), Click: ({click_x}, {click_y}), Distance: {distance:.2f}")
+
+        threshold = 10
+        if distance > threshold:
+            self.log_message(f"Click missed dot {self.current_dot_index + 1}: distance={distance:.2f}")
+            messagebox.showwarning("Warning", f"Click closer to dot {self.current_dot_index + 1}")
+            return
+
+        try:
+            self.calibration_data.append({
+                'time': time.time(),
+                'target_x': target_x,
+                'target_y': target_y,
+                'click_x': click_x,
+                'click_y': click_y,
+                'click_time': time.time() - self.calibration_start_time
+            })
+            self.canvas.itemconfig(dot, fill='#6200ea')
+            self.log_message(f"Clicked dot {self.current_dot_index + 1}: ({click_x}, {click_y})")
+            self.canvas.delete(dot)
+            self.dots.pop()
+            self.current_dot_index += 1
+            self.create_next_dot()
+        except Exception as e:
+            self.log_message(f"Calibration click error: {e}")
+            messagebox.showerror("Error", f"Calibration error: {e}")
+
+    def stop_simulation(self):
+        if self.is_simulating:
+            self.is_simulating = False
+            if self.simulation_after_id:
+                self.root.after_cancel(self.simulation_after_id)
+                self.simulation_after_id = None
+            if self.calibration_window:
+                self.calibration_window.destroy()
+                self.calibration_window = None
+                self.canvas = None
+                self.dots = []
+                self.current_dot_index = 0
+            self.fatigue_factor = 1.0
+            self.status_label.config(text="Status: Idle")
+            self.log_message("Simulation stopped")
+            messagebox.showinfo("Success", "Simulation stopped")
+
+    def simulate_behavior(self):
+        if self.is_simulating:
+            messagebox.showwarning("Warning", "Simulation already in progress!")
+            return
+        if self.is_recording or self.is_replaying:
+            messagebox.showwarning("Warning", "Cannot simulate while recording or replaying!")
+            return
+        if self.calibration_window:
+            self.calibration_window.destroy()
+
+        self.calibration_window = tk.Toplevel(self.root)
+        self.calibration_window.title("Behavior Simulation")
+        self.calibration_window.geometry("800x600")
+        self.calibration_window.configure(bg='#f0f0f0')
+        self.calibration_window.resizable(False, False)
+
+        self.canvas = tk.Canvas(self.calibration_window, width=750, height=500, bg='#e0e0e0', highlightbackground='#b0b0b0')
+        self.canvas.pack(pady=10)
+
+        ttk.Button(self.calibration_window, text="Cancel", command=self.stop_simulation).pack(pady=5)
+
+        self.dots = []
+        self.current_dot_index = 0
+        self.fatigue_factor = 1.0
+        self.is_simulating = True
+        self.status_label.config(text="Status: Simulating Behavior...")
+        self.log_message("Behavior simulation started")
+
+        def create_simulation_dot():
+            if self.current_dot_index < self.total_dots and self.is_simulating:
+                x = random.randint(50, 700)
+                y = random.randint(50, 450)
+                color = random.choice(['black', 'gray', 'darkgray'])
+                dot = self.canvas.create_oval(x-5, y-5, x+5, y+5, fill=color, outline='#ff0000', width=2)
+                self.dots.append((dot, x, y, color))
+                self.log_message(f"Simulation dot {self.current_dot_index + 1} created at ({x}, {y})")
+                return x, y
+            else:
+                self.is_simulating = False
+                self.calibration_window.destroy()
+                self.calibration_window = None
+                self.canvas = None
+                self.dots = []
+                self.current_dot_index = 0
+                self.fatigue_factor = 1.0
+                self.status_label.config(text="Status: Idle")
+                self.log_message("Behavior simulation completed")
+                messagebox.showinfo("Success", "Behavior simulation completed!")
+                return None, None
+
+        def simulate_click():
+            if not self.is_simulating or not self.dots:
+                return
+            dot, target_x, target_y, _ = self.dots[-1]
+            try:
+                if self.anti_detection_settings['enable_anti_detection'].get():
+                    click_deviation = np.random.lognormal(mean=0, sigma=0.3) * user_features['std_speed'] * self.fatigue_factor / max(user_features['movement_smoothness'], 1e-6)
+                    click_x = target_x + click_deviation * random.choice([-1, 1])
+                    click_y = target_y + click_deviation * random.choice([-1, 1])
+                else:
+                    click_x, click_y = target_x, target_y
+                canvas_x, canvas_y = self.canvas.winfo_rootx(), self.canvas.winfo_rooty()
+                screen_x = canvas_x + click_x
+                screen_y = canvas_y + click_y
+                current_x, current_y = pyautogui.position()
+                distance = np.sqrt((screen_x - current_x)**2 + (screen_y - current_y)**2)
+                if self.anti_detection_settings['enable_anti_detection'].get():
+                    is_fast_swing = random.random() < self.anti_detection_settings['fast_swing_prob'].get()
+                    steps = max(20, int(user_features['movement_smoothness'] * self.anti_detection_settings['steps_multiplier'].get()))
+                    if is_fast_swing:
+                        speed_multiplier = 1.5
+                        base_duration = distance / (max(user_features['avg_speed'], 1e-6) * speed_multiplier) * (1 + 0.2 * self.fatigue_factor)
+                        duration = max(self.anti_detection_settings['fast_swing_duration_min'].get(), min(base_duration + np.random.lognormal(mean=0, sigma=0.2), self.anti_detection_settings['fast_swing_duration_max'].get()))
+                        self.log_message(f"Fast swing movement to dot {self.current_dot_index + 1}, duration: {duration:.2f}s, steps: {steps}")
+                    else:
+                        base_duration = distance / max(user_features['avg_speed'], 1e-6) * (1 + 0.3 * self.fatigue_factor)
+                        duration = max(self.anti_detection_settings['slow_duration_min'].get(), min(base_duration + np.random.lognormal(mean=0, sigma=0.2), self.anti_detection_settings['slow_duration_max'].get()))
+                        self.log_message(f"Slow movement to dot {self.current_dot_index + 1}, duration: {duration:.2f}s, steps: {steps}")
+                    path = self.interpolate_bezier_path(current_x, current_y, screen_x, screen_y, steps=steps, duration=duration)
+                    t_values = np.linspace(0, 1, steps)
+                    if is_fast_swing:
+                        velocity_profile = 10 * t_values * (1 - t_values)**3
+                        velocity_profile /= velocity_profile.sum()
+                    else:
+                        velocity_profile = 30 * t_values**2 * (1 - t_values)**2 * (1 + 0.1 * np.sin(np.pi * t_values))
+                        velocity_profile /= velocity_profile.sum()
+                    for i, (x, y) in enumerate(path[:-2]):
+                        step_duration = duration * velocity_profile[i]
+                        step_duration = max(0.02, min(step_duration, 0.06))
+                        if random.random() < self.anti_detection_settings['hesitation_pause_prob'].get() and 0.4 < t_values[i] < 0.6:
+                            pause = random.uniform(self.anti_detection_settings['hesitation_pause_min'].get(), self.anti_detection_settings['hesitation_pause_max'].get())
+                            time.sleep(pause)
+                            self.log_message(f"Hesitation pause of {pause:.3f}s at step {i+1}")
+                        if random.random() < self.anti_detection_settings['mid_path_correction_prob'].get() and t_values[i] > 0.5:
+                            correction = random.uniform(-1, 1) * self.anti_detection_settings['mid_path_correction_amplitude'].get() * self.fatigue_factor
+                            x += correction
+                            y += correction
+                            self.log_message(f"Mid-path correction at step {i+1}: ({x:.2f}, {y:.2f})")
+                        pyautogui.moveTo(x, y, duration=step_duration, tween=pyautogui.easeInOutQuad)
+                    overshoot_x = path[-1][0] + random.uniform(-1, 1) * self.anti_detection_settings['mid_path_correction_amplitude'].get() * self.fatigue_factor
+                    overshoot_y = path[-1][1] + random.uniform(-1, 1) * self.anti_detection_settings['mid_path_correction_amplitude'].get() * self.fatigue_factor
+                    pyautogui.moveTo(overshoot_x, overshoot_y, duration=0.1, tween=pyautogui.easeInOutQuad)
+                    pyautogui.moveTo(screen_x, screen_y, duration=0.1, tween=pyautogui.easeInOutQuad)
+                    self.log_message(f"Micro-correction: overshoot to ({overshoot_x:.2f}, {overshoot_y:.2f}), corrected to ({screen_x:.2f}, {screen_y:.2f})")
+                else:
+                    pyautogui.moveTo(screen_x, screen_y, duration=0.5, tween=pyautogui.easeOutQuad)
+                if self.anti_detection_settings['enable_anti_detection'].get():
+                    click_delay = random.uniform(self.anti_detection_settings['click_delay_min'].get(), self.anti_detection_settings['click_delay_max'].get())
+                    time.sleep(click_delay)
+                    self.log_message(f"Click delay: {click_delay:.3f}s")
+                pyautogui.click()
+                distance = ((click_x - target_x) ** 2 + (click_y - target_y) ** 2) ** 0.5
+                self.log_message(f"Simulated click on dot {self.current_dot_index + 1}: ({click_x:.2f}, {click_y:.2f}), Distance: {distance:.2f}")
+                if self.anti_detection_settings['enable_anti_detection'].get():
+                    self.fatigue_factor += self.anti_detection_settings['fatigue_increment'].get()
+                self.canvas.itemconfig(dot, fill='#6200ea')
+                self.canvas.delete(dot)
+                self.dots.pop()
+                self.current_dot_index += 1
+                x, y = create_simulation_dot()
+                if x is not None:
+                    interval = np.random.lognormal(mean=np.log(1 / user_features['click_frequency']), sigma=user_features['std_key_interval'])
+                    if interval < 0:
+                        interval = 0.5
+                    self.simulation_after_id = self.root.after(int(interval * 1000), simulate_click)
+            except Exception as e:
+                self.is_simulating = False
+                self.log_message(f"Simulation error: {e}")
+                messagebox.showerror("Error", f"Simulation error: {e}")
+                self.stop_simulation()
+
+        x, y = create_simulation_dot()
+        if x is not None:
+            simulate_click()
+
+    def update_features(self):
+        if not self.recording_data:
+            return
+        try:
+            df = pd.DataFrame(self.recording_data)
+            move_data = df[df['event'] == 'move']
+            if len(move_data) >= 2:
+                times = move_data['delta_time'].cumsum().values
+                x_coords = move_data['x'].values
+                y_coords = move_data['y'].values
+                time_diffs = np.diff(times)
+                distances = np.sqrt(np.diff(x_coords)**2 + np.diff(y_coords)**2)
+                speeds = distances / time_diffs
+                accelerations = np.diff(speeds) / time_diffs[:-1]
+                user_features['avg_speed'] = np.mean(speeds) if len(speeds) > 0 else user_features['avg_speed']
+                user_features['std_speed'] = np.std(speeds) if len(speeds) > 0 else user_features['std_speed']
+                user_features['avg_acceleration'] = np.mean(accelerations) if len(accelerations) > 0 else user_features['avg_acceleration']
+                user_features['click_frequency'] = len(df[df['event'] == 'click']) / times[-1] if times[-1] > 0 else user_features['click_frequency']
+                angles = np.arctan2(np.diff(y_coords), np.diff(x_coords))
+                user_features['movement_smoothness'] = 1 / (np.std(np.diff(angles)) + 1e-6) if len(angles) > 1 else user_features['movement_smoothness']
+
+            key_data = df[df['event'] == 'key_press']
+            if len(key_data) >= 2:
+                time_diffs = np.diff(key_data['delta_time'].cumsum().values)
+                user_features['avg_typing_speed'] = 1 / np.mean(time_diffs) if len(time_diffs) > 0 else user_features['avg_typing_speed']
+                user_features['std_key_interval'] = np.std(time_diffs) if len(time_diffs) > 0 else user_features['std_key_interval']
+
+            pd.DataFrame([user_features]).to_csv('user_behavior_features.csv', index=False)
+            self.log_message("User features updated and saved")
+        except Exception as e:
+            self.log_message(f"Update features error: {e}")
+
+    def update_features_from_calibration(self):
+        if not self.calibration_data:
+            return
+        try:
+            df = pd.DataFrame(self.calibration_data)
+            distances = np.sqrt((df['click_x'] - df['target_x'])**2 + (df['click_y'] - df['target_y'])**2)
+            click_times = df['click_time'].diff().dropna()
+            speeds = distances[1:] / click_times
+            accelerations = np.diff(speeds) / click_times[1:] if len(speeds) > 1 else np.array([0])
+            user_features['avg_speed'] = np.mean(speeds) if len(speeds) > 0 else user_features['avg_speed']
+            user_features['std_speed'] = np.std(speeds) if len(speeds) > 0 else user_features['std_speed']
+            user_features['avg_acceleration'] = np.mean(accelerations) if len(accelerations) > 0 else user_features['avg_acceleration']
+            user_features['click_frequency'] = len(df) / df['click_time'].max() if df['click_time'].max() > 0 else user_features['click_frequency']
+            user_features['movement_smoothness'] = 1 / (np.std(distances) + 1e-6) if len(distances) > 0 else user_features['movement_smoothness']
+            pd.DataFrame([user_features]).to_csv('user_behavior_features.csv', index=False)
+            self.log_message("Calibration features updated and saved")
+        except Exception as e:
+            self.log_message(f"Calibration features error: {e}")
+
+    def load_features(self):
+        try:
+            global user_features
+            df = pd.read_csv('user_behavior_features.csv')
+            user_features = df.iloc[0].to_dict()
+            messagebox.showinfo("Success", "Features loaded!")
+            self.log_message("Features loaded")
+        except FileNotFoundError:
+            messagebox.showwarning("Warning", "No feature file found!")
+            self.log_message("No feature file found")
+        except Exception as e:
+            self.log_message(f"Failed to load features: {e}")
+            messagebox.showerror("Error", f"Failed to load features: {e}")
+
+if __name__ == "__main__":
+    try:
+        root = tk.Tk()
+        app = AutomationGUI(root)
+        root.mainloop()
+    except Exception as e:
+        print(f"Main loop error: {e}")
