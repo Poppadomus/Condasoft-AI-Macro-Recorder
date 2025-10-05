@@ -4,9 +4,13 @@ AI Macro Recorder is a powerful Python-based macro recorder designed for recordi
 #Required libraries:
 
 pip install pynput
+
 pip install pyautogui
+
 pip install keyboard
+
 pip install mouse
+
 pip install numpy
 
 just copy and paste and run the script in your preffered python enviroment, I prefer to use anaconda and jupyter but each to their own.
